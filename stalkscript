@@ -1,0 +1,424 @@
+--[[ 
+Stalker script
+Made by ███████ or dukevr7874 on discord
+input the targets name and press on to start
+--]]
+
+-- SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+
+local LocalPlayer = Players.LocalPlayer
+local humanoid, hrp
+local isVanished = false
+local cooldownActive = false
+
+-- UTILS
+local function getTarget()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player.Name == targetName and player ~= LocalPlayer then
+            return player
+        end
+    end
+    return nil
+end
+
+local function rebindCharacter()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    humanoid = char:WaitForChild("Humanoid")
+    hrp = char:WaitForChild("HumanoidRootPart")
+end
+
+local function log(msg)
+    print("[StalkerBot] " .. msg)
+end
+
+local function disappear()
+    if isVanished then return end
+    isVanished = true
+    log("Disappearing...")
+
+    for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Transparency = 1
+            part.CanCollide = false
+        elseif part:IsA("Decal") then
+            part.Transparency = 1
+        end
+    end
+end
+
+local function reappearBehind(target)
+    log("Reappearing...")
+    local root = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if root and hrp then
+        local pos = root.Position - root.CFrame.LookVector * reappearDistance + Vector3.new(0, 3, 0)
+        hrp.CFrame = CFrame.new(pos)
+    end
+
+    for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Transparency = 0
+            part.CanCollide = true
+        elseif part:IsA("Decal") then
+            part.Transparency = 0
+        end
+    end
+
+    isVanished = false
+end
+
+local function isSpottedBy(target)
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    local theirHead = target.Character and target.Character:FindFirstChild("Head")
+    if not myHead or not theirHead then return false end
+
+    local dir = (myHead.Position - theirHead.Position).Unit
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {target.Character, LocalPlayer.Character}
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+    local result = workspace:Raycast(theirHead.Position, dir * 100, rayParams)
+    local spotted = not result or not result.Instance
+    if spotted then
+        log("Spotted by target!")
+    end
+    return spotted
+end
+
+-- Utility function to create buttons with rounded corners
+local function createButton(parent, position, size, bgColor, text, scaled)
+    local button = Instance.new("TextButton")
+    button.Parent = parent
+    button.Size = size
+    button.Position = position
+    button.BackgroundColor3 = bgColor
+    button.Text = text
+    button.TextScaled = scaled
+    button.BorderSizePixel = 0
+
+    -- Rounded corners for a modern look
+    local uicorner = Instance.new("UICorner")
+    uicorner.CornerRadius = UDim.new(0, 5)
+    uicorner.Parent = button
+
+    return button
+end
+
+-- Create ScreenGui with optional rounded background for the frame
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+frame.Size = UDim2.new(0, 220, 0, 270) -- increased height for distance label
+frame.Position = UDim2.new(0.5, -110, 0.5, -135)
+frame.Active = true
+frame.Draggable = true  -- Make frame draggable
+
+local uicorner = Instance.new("UICorner")
+uicorner.CornerRadius = UDim.new(0, 10)
+uicorner.Parent = frame
+
+-- TextBox for player input
+local playerInput = Instance.new("TextBox")
+playerInput.Parent = frame
+playerInput.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+playerInput.Size = UDim2.new(0, 180, 0, 30)
+playerInput.Position = UDim2.new(0, 20, 0, 20)
+playerInput.PlaceholderText = "Enter Player Name"
+playerInput.TextScaled = true
+playerInput.TextColor3 = Color3.fromRGB(0, 0, 0)
+playerInput.Text = targetName  -- Initialize with default targetName
+
+-- Create Buttons: On, Off, Destroy, and Increase/Decrease Distance
+local onButton = createButton(frame, UDim2.new(0, 20, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(0, 255, 0), "On", true)
+local offButton = createButton(frame, UDim2.new(0, 120, 0, 60), UDim2.new(0, 80, 0, 30), Color3.fromRGB(255, 0, 0), "Off", true)
+local destroyButton = createButton(frame, UDim2.new(0, 20, 0, 100), UDim2.new(0, 180, 0, 30), Color3.fromRGB(255, 255, 255), "Destroy", true)
+local plusButton = createButton(frame, UDim2.new(0, 20, 0, 140), UDim2.new(0, 40, 0, 30), Color3.fromRGB(0, 255, 255), "+", true)
+local minusButton = createButton(frame, UDim2.new(0, 160, 0, 140), UDim2.new(0, 40, 0, 30), Color3.fromRGB(255, 165, 0), "-", true)
+
+-- Status Label
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = frame
+statusLabel.Size = UDim2.new(0, 220, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, -30)
+statusLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+statusLabel.Text = "Status: Off"
+statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+statusLabel.TextScaled = true
+statusLabel.Font = Enum.Font.SourceSansBold
+
+-- NEW: Distance Label below status label
+local distanceLabel = Instance.new("TextLabel")
+distanceLabel.Parent = frame
+distanceLabel.Size = UDim2.new(0, 220, 0, 30)
+distanceLabel.Position = UDim2.new(0, 0, 0, 0)
+distanceLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+distanceLabel.Text = "Distance: N/A"
+distanceLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+distanceLabel.TextScaled = true
+distanceLabel.Font = Enum.Font.SourceSans
+
+-- Variables for managing distances
+local dodgeDistance = 9.9
+local lookAtEnabled = false
+
+-- Function to find a player by partial name
+local function findPlayerByName(partialName)
+    partialName = string.lower(partialName)
+    for _, player in pairs(Players:GetPlayers()) do
+        if string.find(string.lower(player.Name), partialName) or string.find(string.lower(player.DisplayName), partialName) then
+            return player
+        end
+    end
+    return nil
+end
+
+-- Enhanced movement function with smarter obstacle avoidance and jump
+local function moveToPlayer(targetPlayer)
+    local localRootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local targetRootPart = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+    if localRootPart and targetRootPart and humanoid then
+        local distance = (localRootPart.Position - targetRootPart.Position).Magnitude
+        if math.abs(distance - followDistance) > 1 then
+            -- Define initial direction and destination
+            local direction = (targetRootPart.Position - localRootPart.Position).unit
+            local destination = targetRootPart.Position - (direction * followDistance)
+
+            -- Set up raycasting parameters for collision detection
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+            -- Check if destination is clear
+            local rayResult = workspace:Raycast(localRootPart.Position, direction * followDistance, raycastParams)
+            if rayResult then
+                -- If collision detected, try alternative dodge directions
+                local dodgeOptions = {
+                    Vector3.new(-direction.Z, 0, direction.X).unit,   -- Perpendicular left
+                    Vector3.new(direction.Z, 0, -direction.X).unit,   -- Perpendicular right
+                    direction * 0.5,                                  -- Halfway forward
+                    -direction                                        -- Opposite (back)
+                }
+
+                local clearDestination = nil
+                for _, dodgeDirection in ipairs(dodgeOptions) do
+                    local dodgePosition = localRootPart.Position + (dodgeDirection * dodgeDistance)
+                    local dodgeRayResult = workspace:Raycast(localRootPart.Position, dodgeDirection * dodgeDistance, raycastParams)
+
+                    -- Move to the first clear dodge position
+                    if not dodgeRayResult then
+                        clearDestination = dodgePosition
+                        break
+                    end
+                end
+
+                if clearDestination then
+                    destination = clearDestination
+                else
+                    -- If no clear dodge path, keep original destination but check for obstacle for jump
+                    -- We'll detect obstacles in front to jump over
+                    local jumpRayResult = workspace:Raycast(localRootPart.Position, direction * jumpDetectDistance, raycastParams)
+                    if jumpRayResult and jumpRayResult.Instance and not humanoid.Jump then
+                        -- Jump once if obstacle detected in front
+                        humanoid.Jump = true
+                        log("Jumping over obstacle")
+                    end
+                end
+            else
+                -- No direct obstacle, but check for small obstacle right in front for jump
+                local jumpRayResult = workspace:Raycast(localRootPart.Position, direction * jumpDetectDistance, raycastParams)
+                if jumpRayResult and jumpRayResult.Instance and not humanoid.Jump then
+                    humanoid.Jump = true
+                    log("Jumping over obstacle")
+                end
+            end
+
+            -- Smoothly move to the calculated destination
+            humanoid:MoveTo(destination)
+
+        elseif distance < dodgeDistance then
+            -- Back away smoothly if too close
+            local retreatDirection = (localRootPart.Position - targetRootPart.Position).unit
+            local retreatPosition = localRootPart.Position + (retreatDirection * dodgeDistance * 0.5)
+            humanoid:MoveTo(retreatPosition)
+        end
+    end
+end
+
+-- Variables for vanish logic based on look time
+local lookingTimer = 0
+local lastLookStatus = false
+
+-- Follow loop
+local followLoop
+local function startFollowing()
+    if followLoop then return end
+
+    rebindCharacter()
+    followLoop = RunService.Heartbeat:Connect(function(dt)
+        if lookAtEnabled then
+            -- Update targetName from input box live
+            local inputName = playerInput.Text
+            if inputName ~= "" then
+                targetName = inputName
+            end
+
+            local targetPlayer = findPlayerByName(targetName)
+            if targetPlayer and humanoid and hrp and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                local targetRoot = targetPlayer.Character.HumanoidRootPart
+                local distance = (hrp.Position - targetRoot.Position).Magnitude
+
+                -- UPDATE distance label here
+                distanceLabel.Text = string.format("Distance: %.2f studs", distance)
+
+                moveToPlayer(targetPlayer)
+
+                if not cooldownActive then
+                    -- Disappear if too close
+                    if distance <= disappearDistance then
+                        disappear()
+                        cooldownActive = true
+                        delay(reappearDelay, function()
+                            reappearBehind(targetPlayer)
+                            cooldownActive = false
+                        end)
+                    elseif isVanished and distance > disappearDistance + 1 then
+                        reappearBehind(targetPlayer)
+                        cooldownActive = false
+                    end
+
+                    -- Check if target is looking continuously
+local function isSpottedBy(target)
+    local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    local theirHead = target.Character and target.Character:FindFirstChild("Head")
+    if not myHead or not theirHead then return false end
+
+    local stalkerPos = myHead.Position
+    local targetPos = theirHead.Position
+    local targetLookVector = theirHead.CFrame.LookVector
+
+    local directionToStalker = (stalkerPos - targetPos).Unit
+
+    -- Dot product to check if stalker is in front (within ~60 degrees cone)
+    -- Cos(60 degrees) = 0.5, so dot > 0.5 means roughly in front
+    local dot = targetLookVector:Dot(directionToStalker)
+
+    local distance = (stalkerPos - targetPos).Magnitude
+
+    local maxSpotDistance = 20  -- max distance for spotting (adjust as needed)
+
+    if dot > 0.5 and distance <= maxSpotDistance then
+        -- Optionally, do a raycast to check no obstacles blocking view
+        local rayParams = RaycastParams.new()
+        rayParams.FilterDescendantsInstances = {target.Character, LocalPlayer.Character}
+        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+        local rayResult = workspace:Raycast(theirHead.Position, directionToStalker * distance, rayParams)
+
+        if not rayResult then
+            -- No obstacle in view, stalker is clearly in front and visible
+            -- log("Stalker is in front and spotted!")
+            return true
+        end
+    end
+
+    return false
+end
+-- Check if target is looking at us
+local spotted = isSpottedBy(targetPlayer)
+
+-- Track continuous spotting
+if spotted then
+    if lastLookStatus then
+        lookingTimer += dt
+    else
+        lookingTimer = dt
+        lastLookStatus = true
+    end
+else
+    lookingTimer = 0
+    lastLookStatus = false
+end
+
+-- Vanish if looked at for too long
+if lookingTimer >= lookAtDisappearDelay and not isVanished then
+    disappear()
+    cooldownActive = true
+    delay(reappearDelay, function()
+        reappearBehind(targetPlayer)
+        cooldownActive = false
+        lookingTimer = 0
+        lastLookStatus = false
+    end)
+end
+
+    return false
+end
+
+local function stopFollowing()
+    if followLoop then
+        followLoop:Disconnect()
+        followLoop = nil
+    end
+    lookingTimer = 0
+    lastLookStatus = false
+    distanceLabel.Text = "Distance: N/A"
+end
+
+-- Update status label
+local function updateStatusLabel()
+    if lookAtEnabled then
+        statusLabel.Text = "Status: On"
+        statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+    else
+        statusLabel.Text = "Status: Off"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+    end
+end
+
+-- Button callbacks
+onButton.MouseButton1Click:Connect(function()
+    local inputName = playerInput.Text
+    if inputName and inputName ~= "" then
+        targetName = inputName
+        lookAtEnabled = true
+        updateStatusLabel()
+        startFollowing()
+    end
+end)
+
+offButton.MouseButton1Click:Connect(function()
+    lookAtEnabled = false
+    updateStatusLabel()
+    stopFollowing()
+end)
+
+destroyButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+plusButton.MouseButton1Click:Connect(function()
+    reappearDistance = reappearDistance + 1
+    distanceLabel.Text = string.format("Reappear Distance: %d", reappearDistance)
+    log("Reappear distance set to " .. reappearDistance)
+end)
+
+minusButton.MouseButton1Click:Connect(function()
+    reappearDistance = math.max(1, reappearDistance - 1)
+    distanceLabel.Text = string.format("Reappear Distance: %d", reappearDistance)
+    log("Reappear distance set to " .. reappearDistance)
+end)
+
+-- Initialize UI labels
+distanceLabel.Text = string.format("Reappear Distance: %d", reappearDistance)
+
+-- Initial rebind on script run
+rebindCharacter()
+
+log("Script loaded. Enter a player name and press On.")
